@@ -1,0 +1,243 @@
+---
+title: "Data Visualization: Problem Set 2"
+author: "Mingyu Dai"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: true
+    toc: yes
+    toc_float: yes
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE, 
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+options(digits = 3)
+
+# default figure size
+knitr::opts_chunk$set(
+  fig.width=6.75, 
+  fig.height=6.75,
+  fig.align = "center"
+)
+```
+
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(vroom)
+library(skimr)
+library(sf)
+library(stringr)
+library(showtext)
+library(ggmap)
+library(ggrepel)
+library(gridExtra)
+library(pander)
+library(here)
+library(leaflet)
+library(tmap)
+library(tmaptools)
+library(hrbrthemes)
+library(mapview)
+library(viridis)
+library(ggtext)
+library(patchwork)
+font_add_google("Lato")
+font_add_google("Roboto Condensed")
+```
+
+```{r, include=FALSE}
+theme_set(theme_minimal(base_family = "Lato"))
+
+
+theme_update(
+  axis.title = element_blank(),
+  axis.text = element_text(color = "grey40"),
+  panel.grid = element_blank(), 
+  # Remove legend
+  legend.position = "none"
+)
+```
+
+
+## Prep.
+
+```{r, load_data}
+alldata <- readr::read_csv(here::here("data/ldn_stop_search_with_lnglat_36m.csv"), show_col_types = FALSE)
+offence <- readr::read_csv(here::here("data/ldn_stop_search_offence_36m.csv"), show_col_types = FALSE)
+```
+
+
+The map of London city
+
+```{r, load_sf}
+# make sure you have the same direcory stucture to get London wards shapefile
+london_wards_sf <- read_sf(here::here("data/London-wards-2018/London-wards-2018_ESRI/London_Ward.shp"))
+# st_geometry(london_wards_sf) # what is the geometry ?
+
+# london_wards_sf = projected CRS:  OSGB 1936 / British National Grid
+
+# change the CRS to use WGS84 lng/lat pairs
+london_wgs84 <-  london_wards_sf %>%
+  st_transform(4326) # transform CRS to WGS84, latitude/longitude
+
+st_geometry(london_wgs84) # what is the geometry ?
+
+ggplot() + 
+  geom_sf(data = london_wgs84, fill = "#3B454A", size = 0.125, colour = "#b2b2b277")
+```
+```{r, sf}
+get_sf <- function(data) {
+  sf_all <- st_as_sf(data, 
+                coords=c('lng', 'lat'),
+                crs = 4326)
+  # filter points using the map
+  sf_within <- st_filter(sf_all, london_wgs84)
+  return(sf_within)
+}
+```
+
+## Plot. 1
+
+Stop-and-search cases surged in mid 2020 over the past 36 months. Most objects of search cases are on "controlled drugs". 
+
+```{r, plot1, message=FALSE, warning=FALSE}
+alldata %>% 
+  mutate(controlled_drugs = ifelse(object_of_search == "Controlled drugs", "Controlled drugs", "Other")) %>% 
+  mutate(controlled_drugs = ifelse(is.na(controlled_drugs), "Other", controlled_drugs)) %>% 
+  group_by(year, month, controlled_drugs) %>% 
+  summarize(n_case = n()) %>% 
+  mutate(month_year = as.Date(paste(year, "-", month, "-01", sep=""))) %>% 
+  # label for the graph
+  mutate(label = if_else(month_year == as.Date("2022-09-01"), as.character(controlled_drugs), NA_character_)) %>% 
+  filter(month_year >= "2019-10-01") %>% 
+  ggplot(aes(x = month_year, y = n_case, group = controlled_drugs, color = controlled_drugs)) + 
+  geom_vline(
+    xintercept = c(as.Date("2019-10-01"), as.Date("2020-01-01"), as.Date("2020-04-01"), as.Date("2020-07-01"), 
+                   as.Date("2020-10-01"), as.Date("2021-01-01"), as.Date("2021-04-01"), as.Date("2021-07-01"), 
+                   as.Date("2021-10-01"), as.Date("2022-01-01"), as.Date("2022-04-01"), as.Date("2022-07-01"),
+                   as.Date("2022-09-01")), color = "grey80", size = .4) + 
+  geom_segment(
+    data = tibble(y = seq(0, 45000, by = 2500), x1 = as.Date("2019-10-01"), x2 = as.Date("2022-09-01")),
+    aes(x = x1, xend = x2, y = y, yend = y),
+    inherit.aes = FALSE,
+    color = "grey80",
+    size = .4
+  ) +
+  geom_segment(
+    data = tibble(y = 0, x1 = as.Date("2019-10-01"), x2 = as.Date("2022-09-01")),
+    aes(x = x1, xend = x2, y = y, yend = y),
+    inherit.aes = FALSE,
+    color = "grey40",
+    size = .4
+  ) +
+  geom_line() + 
+  labs(
+    x = NULL, 
+    y = NULL, 
+    title = "Stop-and-search cases surged in mid 2020 over the past 36 months", 
+    caption = "Source: UK Metropolitan Police"
+  ) +
+  scale_x_date(limits = c(as.Date("2019-10-01"), as.Date("2023-08-01")), 
+               date_labels = "%y-%b", 
+               breaks = c(as.Date("2019-11-01"), as.Date("2020-05-01"), 
+                          as.Date("2020-11-01"), as.Date("2021-05-01"), 
+                          as.Date("2021-11-01"), as.Date("2022-05-01")))+
+  geom_text_repel(
+    aes(color = controlled_drugs, label = label),
+    xlim = c(as.Date("2022-10-01"), NA),
+    family = "Lato",
+    fontface = "bold",
+    size = 4, 
+    segment.size = .7,
+    segment.alpha = .5,
+    segment.linetype = "dotted"
+  ) +
+  theme(legend.position = "none", 
+        plot.title.position = "plot", 
+        plot.caption=element_text(hjust = 0.65)) 
+```
+## Plot. 2
+
+Over 80% of "Controlled drugs, "Offensive weapons", "Stolen goods". 
+
+Grouping the records by objects of search, we can see that each group's points cluster at the center of the city of London. 
+
+```{r}
+alldata %>% 
+  group_by(object_of_search) %>% 
+  summarize(cnt = n()) %>% 
+  mutate(perc = cnt / sum(cnt)) %>% 
+  slice_max(perc, n = 5)
+```
+
+```{r, location}
+ggplot() + 
+  geom_sf(data = london_wgs84, fill = "#3B454A", size = 0.125, colour = "#b2b2b277") +
+  # add points from dtop and search shapefile
+  geom_sf(
+    data = get_sf(offence %>% filter(year == 2020 & month == 5)), 
+    aes(fill = object_of_search), 
+    color = "white", size = 1.5, alpha = 0.7, shape = 21, 
+    show.legend = FALSE
+  ) + 
+  hrbrthemes::theme_ft_rc(grid = "", strip_text_face = "bold") +
+  theme(axis.text = element_blank()) + 
+  theme(strip.text = element_text(color = "white")) + 
+  theme_minimal() +
+  coord_sf(datum = NA) + # remove coord
+  facet_wrap(~object_of_search) +
+  labs(title = "Locations of Stop&Search in London, 2020 May") +
+  NULL
+
+ggplot() + 
+  geom_sf(data = london_wgs84, fill = "#3B454A", size = 0.125, colour = "#b2b2b277") +
+  # add points from dtop and search shapefile
+  geom_sf(
+    data = get_sf(offence %>% filter(year == 2020 & month == 6)), 
+    aes(fill = object_of_search), 
+    color = "white", size = 1.5, alpha = 0.7, shape = 21, 
+    show.legend = FALSE
+  ) + 
+  hrbrthemes::theme_ft_rc(grid = "", strip_text_face = "bold") +
+  theme(axis.text = element_blank()) + 
+  theme(strip.text = element_text(color = "white")) + 
+  theme_minimal() +
+  coord_sf(datum = NA) + # remove coord
+  facet_wrap(~object_of_search) +
+  labs(title = "Locations of Stop&Search in London, 2020 June") +
+  NULL
+```
+
+## Plot. 3
+
+The West End had most of the stop-and-search cases in Jun, 2020. St. James's is the second most "stop-and-searched" district. 
+
+```{r}
+get_distri <- function(data, year, month) {
+  temp <- london_wgs84 %>%
+  mutate(count = lengths(
+    st_contains(london_wgs84, 
+                get_sf(data %>% filter(year == year & 
+                                     month == month)))))
+  return(temp)
+}
+
+tmap::tmap_mode("view") # interactive map
+tmap::tm_shape(get_distri(offence, 2020, 6)) +
+  tm_polygons("count")
+```
+
+
+
+
+
+
